@@ -19,17 +19,24 @@ Our data pipeline is tracked using **DVC**, enabling reproducible analysis and a
 
 ```bash
 # Create local storage directory outside the project
-mkdir /path/to/local/storage
+mkdir C:\Users\gebaw\dvc-storage
+
+# Optional but recommended: keep the local cache outside the repo too
+mkdir C:\Users\gebaw\dvc-cache
 
 # Configure DVC remote
-dvc remote add -d localstorage /path/to/local/storage
+dvc remote add -d localstorage C:\Users\gebaw\dvc-storage
+dvc config cache.dir C:\Users\gebaw\dvc-cache
 ```
 
 #### Reproduce the Data Pipeline
 
 ```bash
-# Pull versioned data from remote
-dvc pull
+# Rebuild the cleaned dataset from the raw version
+dvc repro prepare
+
+# Push the tracked raw and cleaned versions to the local remote
+dvc push
 
 # Verify data is in place
 ls data/
@@ -38,15 +45,16 @@ ls data/
 #### Track New Data Versions
 
 ```bash
-# After processing data
+# Track the raw dataset
 dvc add data/insurance_data.csv
 
-# Push to remote
+# After cleaning or updating the dataset, rerun the pipeline and push
+dvc repro prepare
 dvc push
 
-# Commit changes to Git
-git add data/insurance_data.csv.dvc .gitignore
-git commit -m "Track data version [description]"
+# Commit the DVC metadata files
+git add data/insurance_data.csv.dvc dvc.lock dvc.yaml .dvc/config .dvcignore
+git commit -m "track data versions with DVC"
 ```
 
 ## Project Structure

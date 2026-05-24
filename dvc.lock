@@ -1,0 +1,14 @@
+schema: '2.0'
+stages:
+  prepare:
+    cmd: python src/data_loader.py
+    deps:
+    - path: data/insurance_data.csv
+      hash: md5
+      md5: f7632df0e8aae1bfdaadbbcd39f72668
+      size: 1155
+    outs:
+    - path: data/insurance_data_clean.csv
+      hash: md5
+      md5: a291a948b84573d66074e1de751c7a9b
+      size: 1499

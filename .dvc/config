@@ -1,0 +1,6 @@
+[core]
+    remote = localstorage
+[cache]
+    dir = C:\Users\gebaw\dvc-cache
+['remote "localstorage"']
+    url = C:\Users\gebaw\dvc-storage
