@@ -1,6 +1,7 @@
 """Data Loading and Preprocessing Utilities"""
 
 import logging
+from argparse import ArgumentParser
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -173,7 +174,27 @@ def load_and_prepare(data_path: str = "data/insurance_data.csv") -> pd.DataFrame
 
 
 if __name__ == "__main__":
-    # Example usage
-    loader = InsuranceDataLoader("data/insurance_data.csv")
-    df = loader.load()
+    parser = ArgumentParser(description="Load, clean, and export insurance data")
+    parser.add_argument(
+        "--input",
+        default="data/insurance_data.csv",
+        help="Path to the raw insurance CSV",
+    )
+    parser.add_argument(
+        "--output",
+        default="data/insurance_data_clean.csv",
+        help="Path where the cleaned CSV should be written",
+    )
+    args = parser.parse_args()
+
+    loader = InsuranceDataLoader(args.input)
+    loader.load()
     print(loader.check_missing_values())
+
+    cleaned_df = loader.create_derived_features(
+        loader.handle_missing_values(strategy="drop")
+    )
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cleaned_df.to_csv(output_path, index=False)
+    logger.info(f"Saved cleaned dataset to {output_path}")
