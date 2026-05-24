@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from typing import Tuple, List
+from typing import Tuple, List, Dict
 import logging
 
 logging.basicConfig(level=logging.INFO)
