@@ -24,8 +24,6 @@ data/*.parquet
 .dvc/*
 !.dvc/config
 !.dvc/.gitignore
-!.dvc/tmp/
-!.dvc/cache/
 
 # Model artifacts
 models/
