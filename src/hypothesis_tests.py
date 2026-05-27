@@ -1,7 +1,7 @@
-"""Statistical Hypothesis Testing Framework"""
+"""Statistical Hypothesis Testing Framework."""
 
 import logging
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -154,6 +154,320 @@ class HypothesisTestSuite:
         logger.info(f"Results exported to {filepath}")
 
 
+def prepare_analysis_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a copy of the dataset with analysis-ready KPI columns."""
+    analysis_df = df.copy()
+
+    if "HasClaim" not in analysis_df.columns:
+        analysis_df["HasClaim"] = (analysis_df["TotalClaims"] > 0).astype(int)
+
+    if "Margin" not in analysis_df.columns:
+        analysis_df["Margin"] = analysis_df["TotalPremium"] - analysis_df["TotalClaims"]
+
+    if "ClaimSeverity" not in analysis_df.columns:
+        analysis_df["ClaimSeverity"] = analysis_df["TotalClaims"].where(
+            analysis_df["TotalClaims"] > 0
+        )
+
+    return analysis_df
+
+
+def _decision(p_value: float, alpha: float) -> str:
+    return "Reject H0" if p_value < alpha else "Fail to reject H0"
+
+
+def _format_percentage(value: float) -> str:
+    return f"{value:.1%}"
+
+
+def compare_binary_kpi(
+    df: pd.DataFrame,
+    feature: str,
+    group_a: str,
+    group_b: str,
+    *,
+    alpha: float = 0.05,
+    kpi: str = "HasClaim",
+    hypothesis: str | None = None,
+    business_question: str | None = None,
+) -> Dict:
+    """Run a chi-squared test on a binary KPI for two groups."""
+    analysis_df = prepare_analysis_frame(df)
+    subset = analysis_df[analysis_df[feature].isin([group_a, group_b])].copy()
+
+    if subset.empty or subset[feature].nunique() < 2:
+        raise ValueError(f"Need at least two comparable groups for {feature}.")
+
+    contingency = pd.crosstab(subset[feature], subset[kpi]).reindex(
+        index=[group_a, group_b],
+        columns=[0, 1],
+        fill_value=0,
+    )
+
+    chi2, p_value, dof, expected = stats.chi2_contingency(contingency)
+
+    rate_a = subset.loc[subset[feature] == group_a, kpi].mean()
+    rate_b = subset.loc[subset[feature] == group_b, kpi].mean()
+
+    result = {
+        "hypothesis": hypothesis
+        or f"H0: No {kpi.lower()} difference between {group_a} and {group_b}",
+        "business_question": business_question,
+        "feature": feature,
+        "group_a": group_a,
+        "group_b": group_b,
+        "kpi": kpi,
+        "test": "Chi-squared test",
+        "statistic": round(float(chi2), 4),
+        "degrees_of_freedom": int(dof),
+        "p_value": round(float(p_value), 6),
+        "group_a_rate": round(float(rate_a), 3),
+        "group_b_rate": round(float(rate_b), 3),
+        "group_a_n": int((subset[feature] == group_a).sum()),
+        "group_b_n": int((subset[feature] == group_b).sum()),
+        "decision": _decision(float(p_value), alpha),
+        "reject_h0": bool(p_value < alpha),
+        "alpha": alpha,
+    }
+
+    if business_question:
+        result["business_recommendation"] = (
+            f"{business_question}: {group_a} rate is {_format_percentage(rate_a)} versus "
+            f"{group_b} rate at {_format_percentage(rate_b)}."
+        )
+
+    result["contingency_table"] = contingency.to_dict()
+    return result
+
+
+def compare_numeric_kpi(
+    df: pd.DataFrame,
+    feature: str,
+    group_a: str,
+    group_b: str,
+    *,
+    alpha: float = 0.05,
+    kpi: str = "Margin",
+    hypothesis: str | None = None,
+    business_question: str | None = None,
+) -> Dict:
+    """Run a Welch t-test on a numeric KPI for two groups."""
+    analysis_df = prepare_analysis_frame(df)
+
+    if kpi == "ClaimSeverity":
+        group_a_values = analysis_df.loc[
+            (analysis_df[feature] == group_a) & (analysis_df["TotalClaims"] > 0),
+            "TotalClaims",
+        ].dropna()
+        group_b_values = analysis_df.loc[
+            (analysis_df[feature] == group_b) & (analysis_df["TotalClaims"] > 0),
+            "TotalClaims",
+        ].dropna()
+    else:
+        group_a_values = analysis_df.loc[analysis_df[feature] == group_a, kpi].dropna()
+        group_b_values = analysis_df.loc[analysis_df[feature] == group_b, kpi].dropna()
+
+    if len(group_a_values) < 2 or len(group_b_values) < 2:
+        raise ValueError(
+            f"Need at least two observations per group for {feature} and {kpi}."
+        )
+
+    t_stat, p_value = stats.ttest_ind(group_a_values, group_b_values, equal_var=False)
+
+    mean_a = float(group_a_values.mean())
+    mean_b = float(group_b_values.mean())
+
+    result = {
+        "hypothesis": hypothesis
+        or f"H0: No {kpi.lower()} difference between {group_a} and {group_b}",
+        "business_question": business_question,
+        "feature": feature,
+        "group_a": group_a,
+        "group_b": group_b,
+        "kpi": kpi,
+        "test": "Welch t-test",
+        "statistic": round(float(t_stat), 4),
+        "p_value": round(float(p_value), 6),
+        "group_a_mean": round(mean_a, 2),
+        "group_b_mean": round(mean_b, 2),
+        "group_a_n": int(len(group_a_values)),
+        "group_b_n": int(len(group_b_values)),
+        "decision": _decision(float(p_value), alpha),
+        "reject_h0": bool(p_value < alpha),
+        "alpha": alpha,
+    }
+
+    if business_question:
+        result["business_recommendation"] = (
+            f"{business_question}: {group_a} average {kpi.lower()} is {mean_a:.2f} versus "
+            f"{group_b} at {mean_b:.2f}."
+        )
+
+    return result
+
+
+def build_business_recommendation(result: Dict) -> str:
+    """Convert a test result into a concise business-facing recommendation."""
+    if not result.get("reject_h0"):
+        return (
+            f"We fail to reject H0 for {result['feature']} ({result['p_value']:.3f}); "
+            "no pricing change is warranted from this test alone."
+        )
+
+    feature = result["feature"]
+    group_a = result["group_a"]
+    group_b = result["group_b"]
+
+    if result["kpi"] == "HasClaim":
+        return (
+            f"We reject H0 for {feature} ({result['p_value']:.3f}). {group_a} shows a "
+            f"higher claim frequency than {group_b}, so a regional or segment-specific "
+            "premium adjustment should be reviewed."
+        )
+
+    if result["kpi"] == "ClaimSeverity":
+        return (
+            f"We reject H0 for {feature} ({result['p_value']:.3f}). {group_a} has a "
+            f"different claim severity profile than {group_b}, which supports targeted "
+            "underwriting or excess-setting changes."
+        )
+
+    return (
+        f"We reject H0 for {feature} ({result['p_value']:.3f}). The margin gap between "
+        f"{group_a} and {group_b} suggests a targeted pricing review is warranted."
+    )
+
+
+def run_task3_analysis(df: pd.DataFrame, alpha: float = 0.05) -> pd.DataFrame:
+    """Run the four Task 3 hypothesis tests and return a results table."""
+    analysis_df = prepare_analysis_frame(df)
+
+    comparisons = [
+        {
+            "hypothesis": "H0: No risk differences across provinces",
+            "business_question": "Province-level risk is being checked",
+            "method": "binary",
+            "feature": "Province",
+            "group_a": "Gauteng",
+            "group_b": "Western Cape",
+            "kpi": "HasClaim",
+        },
+        {
+            "hypothesis": "H0: No risk differences between zip codes",
+            "business_question": "Zip-code-level claim frequency is being checked",
+            "method": "binary",
+            "feature": "ZipCodeCluster",
+            "group_a": "2000-series",
+            "group_b": "8000-series",
+            "kpi": "HasClaim",
+        },
+        {
+            "hypothesis": "H0: No significant margin difference between zip codes",
+            "business_question": "Zip-code-level margin is being checked",
+            "method": "numeric",
+            "feature": "ZipCodeCluster",
+            "group_a": "2000-series",
+            "group_b": "8000-series",
+            "kpi": "Margin",
+        },
+        {
+            "hypothesis": "H0: No risk difference between Women and Men",
+            "business_question": "Gender-based claim frequency is being checked",
+            "method": "binary",
+            "feature": "Gender",
+            "group_a": "F",
+            "group_b": "M",
+            "kpi": "HasClaim",
+        },
+    ]
+
+    def cluster_zipcode(zip_code: object) -> str | None:
+        zip_text = str(zip_code)
+        if zip_text.startswith("2"):
+            return "2000-series"
+        if zip_text.startswith("8"):
+            return "8000-series"
+        if zip_text.startswith("4"):
+            return "4000-series"
+        return None
+
+    analysis_df["ZipCodeCluster"] = analysis_df["ZipCode"].apply(cluster_zipcode)
+
+    if analysis_df["ZipCodeCluster"].isna().any():
+        missing = sorted(
+            analysis_df.loc[analysis_df["ZipCodeCluster"].isna(), "ZipCode"]
+            .astype(str)
+            .unique()
+        )
+        raise ValueError(
+            "Zip-code clusters are incomplete in the sample data. Missing values: "
+            + ", ".join(missing)
+        )
+
+    results: List[Dict] = []
+    for item in comparisons:
+        if item["method"] == "binary":
+            result = compare_binary_kpi(
+                analysis_df,
+                item["feature"],
+                item["group_a"],
+                item["group_b"],
+                alpha=alpha,
+                kpi=item["kpi"],
+                hypothesis=item["hypothesis"],
+                business_question=item["business_question"],
+            )
+        else:
+            result = compare_numeric_kpi(
+                analysis_df,
+                item["feature"],
+                item["group_a"],
+                item["group_b"],
+                alpha=alpha,
+                kpi=item["kpi"],
+                hypothesis=item["hypothesis"],
+                business_question=item["business_question"],
+            )
+
+        result["recommendation"] = build_business_recommendation(result)
+        results.append(result)
+
+    results_df = pd.DataFrame(results)
+    ordered_columns = [
+        "hypothesis",
+        "business_question",
+        "feature",
+        "group_a",
+        "group_b",
+        "kpi",
+        "test",
+        "statistic",
+        "p_value",
+        "decision",
+        "reject_h0",
+        "group_a_rate",
+        "group_b_rate",
+        "group_a_mean",
+        "group_b_mean",
+        "group_a_n",
+        "group_b_n",
+        "recommendation",
+    ]
+
+    existing_columns = [
+        column for column in ordered_columns if column in results_df.columns
+    ]
+    remaining_columns = [
+        column for column in results_df.columns if column not in existing_columns
+    ]
+    return results_df[existing_columns + remaining_columns]
+
+
+def run_standard_tests(df: pd.DataFrame, alpha: float = 0.05) -> pd.DataFrame:
+    """Backward-compatible wrapper for the Task 3 hypothesis tests."""
+    return run_task3_analysis(df, alpha=alpha)
+
+
 def run_standard_tests(df: pd.DataFrame, alpha: float = 0.05) -> pd.DataFrame:
     """
     Run standard hypothesis tests for insurance risk analysis.
@@ -217,5 +531,5 @@ if __name__ == "__main__":
     from data_loader import load_and_prepare
 
     df = load_and_prepare("data/insurance_data.csv")
-    results = run_standard_tests(df)
-    print(results)
+    results = run_task3_analysis(df)
+    print(results.to_string(index=False))
